@@ -2,3 +2,4 @@
 .venv/
 client_secrets.json
 videos.json
+__pycache__/

@@ -1,5 +1,10 @@
+"""
+Get the data on the latest cracking the cryptic video.
+"""
+
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -23,24 +28,24 @@ URL_PATTERN = re.compile(
 #   (?:(?:\.[\w_-]+)+)) => non-capturing group of non-capturing group of ., letters, numbers, _, - repeated
 # 3rd group: ([\w.,@?^=%&:\/~+#-]*[\w@?^=%&\/~+#-]) => from / onward
 
-CTC_LATEST = Path("CTC_LATEST.json")
+CTC_LATEST = Path("videos.json")
 
 
-def main() -> Video | None:
+async def main() -> Video | None:
     """
     Tool to get the latest Sudoku from CrackingTheCryptic
     """
     with CTC_LATEST.open("r", encoding="utf8") as file:
         channel_id = json.load(file)["Channel"]
-    last_video = get_latest_video(channel_id=channel_id)
-    current_id = get_lastest()
+    last_video = await get_latest_video(channel_id=channel_id)
+    current_id = await get_lastest()
     if (
         "crossword" in last_video.title.lower()
         or "wordle" in last_video.title.lower()
         or last_video.youtube_id == current_id
     ):
         return
-    write_out(channel_id, last_video.youtube_id)
+    await write_out(channel_id, last_video.youtube_id)
     return last_video
 
 
@@ -55,7 +60,7 @@ class Video(NamedTuple):
     youtube_id: str
 
 
-def get_latest_video(channel_id: str) -> Video:
+async def get_latest_video(channel_id: str) -> Video:
     """
     Get the latest video published from the channel
     """
@@ -110,7 +115,7 @@ def get_time(runtime: str) -> time.struct_time:
             return time.strptime(runtime, "PT%SS")
 
 
-def write_out(channel: str, video: str):
+async def write_out(channel: str, video: str):
     """
     Write the last video to disk
     """
@@ -118,7 +123,7 @@ def write_out(channel: str, video: str):
         json.dump({"Channel": channel, "LastID": video}, out)
 
 
-def get_lastest() -> str:
+async def get_lastest() -> str:
     """
     Retrieve the last video found
     """
@@ -129,13 +134,13 @@ def get_lastest() -> str:
 def initialize():
     """Create any needed files on disk."""
     if not CTC_LATEST.exists():
-        write_out(channel="UCC-UOdK8-mIjxBQm_ot1T-Q", video="")
+        asyncio.run(write_out(channel="UCC-UOdK8-mIjxBQm_ot1T-Q", video=""))
 
 
 if __name__ == "__main__":
     initialize()
-    if (video := main()) is not None:
+    if (found := asyncio.run(main())) is not None:
         print(
-            f"The latest video {video.title} ({video.sudoku_link}) took "
-            f"{time.strftime('%H:%M:%S', video.duration)}."
+            f"The latest video {found.title} ({found.sudoku_link}) took "
+            f"{time.strftime('%H:%M:%S', found.duration)}."
         )
