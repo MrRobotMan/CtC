@@ -1,2 +1,4 @@
-/target
 .env
+.venv/
+client_secrets.json
+videos.json
