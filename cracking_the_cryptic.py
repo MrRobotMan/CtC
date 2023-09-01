@@ -12,7 +12,7 @@ import ssl
 import time
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any, NamedTuple, Self
+from typing import Any, NamedTuple
 
 import requests
 from dotenv import load_dotenv
@@ -78,7 +78,7 @@ class Video(NamedTuple):
         )
 
     @classmethod
-    def from_id(cls, video_id: str) -> Self:
+    def from_id(cls, video_id: str) -> Video:
         data = get_data(f"videos?part=snippet%2CcontentDetails&id={video_id}")
         run_time = get_time(data["contentDetails"]["duration"])
         description = data["snippet"]["description"]
