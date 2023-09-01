@@ -4,6 +4,7 @@ Get the data on the latest cracking the cryptic video.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
@@ -54,10 +55,11 @@ def mainloop():
                 and "wordle" not in last_video.title.lower()
                 and last_video.youtube_id != current.youtube_id
             ):
+                atexit.unregister(write_out)
                 current = last_video
                 send_email(current.message())
+                atexit.register(write_out, channel, current.youtube_id)
         except KeyboardInterrupt:
-            write_out(channel, current.youtube_id)
             return
 
 
