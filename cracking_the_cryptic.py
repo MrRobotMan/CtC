@@ -59,7 +59,7 @@ def mainloop():
                 current = last_video
                 send_email(current.message())
                 atexit.register(write_out, channel, current.youtube_id)
-            time.sleep(60)
+            time.sleep(600)
         except KeyboardInterrupt:
             return
 
@@ -117,24 +117,6 @@ def get_latest_video(channel_id: str) -> Video:
     latest_id = video["contentDetails"]["videoId"]
 
     return Video.from_id(latest_id)
-
-    # data = get_data(f"videos?part=snippet%2CcontentDetails&id={latest_id}")
-    # run_time = get_time(data["contentDetails"]["duration"])
-    # description = data["snippet"]["description"]
-    # title = data["snippet"]["title"]
-
-    # urls = [
-    #     link.group(0)
-    #     for link in URL_PATTERN.finditer(description)
-    #     if "tinyurl.com" in (lnk := link.group(0).lower())
-    #     or "sudokupad.app" in lnk
-    #     or "crackingthecryptic.com" in lnk
-    # ]
-    # if not urls:
-    #     url = ""
-    # else:
-    #     url = urls[0]
-    # return Video(title=title, sudoku_link=url, duration=run_time, youtube_id=latest_id)
 
 
 def send_email(message: str):
