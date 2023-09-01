@@ -4,17 +4,26 @@ Get the data on the latest cracking the cryptic video.
 
 from __future__ import annotations
 
-import asyncio
 import json
+import os
 import re
+import smtplib
+import ssl
 import time
+from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Self
 
 import requests
+from dotenv import load_dotenv
 
-with open(".env", encoding="utf8") as dotenv:
-    API_KEY = dotenv.readline().strip().split("=")[1]
+load_dotenv()
+API_KEY = os.environ["YOUTUBE_KEY"]
+EMAIL_USER = os.environ["EMAIL_USER"]
+EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+
 BASE_URL = "https://youtube.googleapis.com/youtube/v3"
 
 URL_PATTERN = re.compile(
@@ -31,22 +40,25 @@ URL_PATTERN = re.compile(
 CTC_LATEST = Path("videos.json")
 
 
-async def main() -> Video | None:
+def mainloop():
     """
     Tool to get the latest Sudoku from CrackingTheCryptic
     """
-    with CTC_LATEST.open("r", encoding="utf8") as file:
-        channel_id = json.load(file)["Channel"]
-    last_video = await get_latest_video(channel_id=channel_id)
-    current_id = await get_lastest()
-    if (
-        "crossword" in last_video.title.lower()
-        or "wordle" in last_video.title.lower()
-        or last_video.youtube_id == current_id
-    ):
-        return
-    await write_out(channel_id, last_video.youtube_id)
-    return last_video
+    (channel, current) = initialize()
+    current = Video.from_id(current)
+    while True:
+        try:
+            last_video = get_latest_video(channel_id=channel)
+            if (
+                "crossword" not in last_video.title.lower()
+                and "wordle" not in last_video.title.lower()
+                and last_video.youtube_id != current.youtube_id
+            ):
+                current = last_video
+                send_email(current.message())
+        except KeyboardInterrupt:
+            write_out(channel, current.youtube_id)
+            return
 
 
 class Video(NamedTuple):
@@ -59,8 +71,34 @@ class Video(NamedTuple):
     duration: time.struct_time
     youtube_id: str
 
+    def message(self) -> str:
+        return (
+            f"The latest video {self.title} (https://www.youtube.com/watch?v={self.youtube_id}) "
+            f"for {self.sudoku_link}) took {time.strftime('%H:%M:%S', self.duration)}"
+        )
 
-async def get_latest_video(channel_id: str) -> Video:
+    @classmethod
+    def from_id(cls, video_id: str) -> Self:
+        data = get_data(f"videos?part=snippet%2CcontentDetails&id={video_id}")
+        run_time = get_time(data["contentDetails"]["duration"])
+        description = data["snippet"]["description"]
+        title = data["snippet"]["title"]
+
+        urls = [
+            link.group(0)
+            for link in URL_PATTERN.finditer(description)
+            if "tinyurl.com" in (lnk := link.group(0).lower())
+            or "sudokupad.app" in lnk
+            or "crackingthecryptic.com" in lnk
+        ]
+        if not urls:
+            url = ""
+        else:
+            url = urls[0]
+        return cls(title=title, sudoku_link=url, duration=run_time, youtube_id=video_id)
+
+
+def get_latest_video(channel_id: str) -> Video:
     """
     Get the latest video published from the channel
     """
@@ -75,22 +113,42 @@ async def get_latest_video(channel_id: str) -> Video:
 
     latest_id = video["contentDetails"]["videoId"]
 
-    data = get_data(f"videos?part=snippet%2CcontentDetails&id={latest_id}")
-    run_time = get_time(data["contentDetails"]["duration"])
-    description = data["snippet"]["description"]
-    title = data["snippet"]["title"]
+    return Video.from_id(latest_id)
 
-    urls = [
-        link.group(0)
-        for link in URL_PATTERN.finditer(description)
-        if "tinyurl.com" in link.group(0).lower()
-        or "sudokupad.app" in link.group(0).lower()
-    ]
-    if not urls:
-        url = ""
-    else:
-        url = urls[0]
-    return Video(title=title, sudoku_link=url, duration=run_time, youtube_id=latest_id)
+    # data = get_data(f"videos?part=snippet%2CcontentDetails&id={latest_id}")
+    # run_time = get_time(data["contentDetails"]["duration"])
+    # description = data["snippet"]["description"]
+    # title = data["snippet"]["title"]
+
+    # urls = [
+    #     link.group(0)
+    #     for link in URL_PATTERN.finditer(description)
+    #     if "tinyurl.com" in (lnk := link.group(0).lower())
+    #     or "sudokupad.app" in lnk
+    #     or "crackingthecryptic.com" in lnk
+    # ]
+    # if not urls:
+    #     url = ""
+    # else:
+    #     url = urls[0]
+    # return Video(title=title, sudoku_link=url, duration=run_time, youtube_id=latest_id)
+
+
+def send_email(message: str):
+    """
+    Send an email with the latest video information.
+    """
+    msg = MIMEText(message)
+    msg["Subject"] = "Cracking the Cryptic Video"
+    msg["From"] = EMAIL_USER
+    msg["To"] = EMAIL_USER
+
+    context = ssl.create_default_context()
+    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+    server.starttls(context=context)
+    server.login(EMAIL_USER, EMAIL_PASSWORD)
+    server.send_message(msg)
+    server.quit()
 
 
 def get_data(payload: str) -> dict[str, Any]:
@@ -115,32 +173,22 @@ def get_time(runtime: str) -> time.struct_time:
             return time.strptime(runtime, "PT%SS")
 
 
-async def write_out(channel: str, video: str):
+def write_out(channel: str, video: str):
     """
     Write the last video to disk
     """
     with CTC_LATEST.open("w", encoding="utf8") as out:
-        json.dump({"Channel": channel, "LastID": video}, out)
+        json.dump({"channel": channel, "last_id": video}, out, indent=2)
 
 
-async def get_lastest() -> str:
+def initialize() -> tuple[str, str]:
     """
     Retrieve the last video found
     """
     with CTC_LATEST.open("r", encoding="utf8") as file:
-        return json.load(file)["LastID"]
-
-
-def initialize():
-    """Create any needed files on disk."""
-    if not CTC_LATEST.exists():
-        asyncio.run(write_out(channel="UCC-UOdK8-mIjxBQm_ot1T-Q", video=""))
+        data = json.load(file)
+    return data["channel"], data["last_id"]
 
 
 if __name__ == "__main__":
-    initialize()
-    if (found := asyncio.run(main())) is not None:
-        print(
-            f"The latest video {found.title} ({found.sudoku_link}) took "
-            f"{time.strftime('%H:%M:%S', found.duration)}."
-        )
+    mainloop()
