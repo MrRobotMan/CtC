@@ -59,6 +59,7 @@ def mainloop():
                 current = last_video
                 send_email(current.message())
                 atexit.register(write_out, channel, current.youtube_id)
+            time.sleep(60)
         except KeyboardInterrupt:
             return
 
