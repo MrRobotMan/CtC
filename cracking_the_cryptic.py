@@ -11,6 +11,7 @@ import re
 import smtplib
 import ssl
 import time
+from datetime import timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -37,6 +38,13 @@ URL_PATTERN = re.compile(
 #   [\w_-]+ => letters, numbers, _, - repeated
 #   (?:(?:\.[\w_-]+)+)) => non-capturing group of non-capturing group of ., letters, numbers, _, - repeated
 # 3rd group: ([\w.,@?^=%&:\/~+#-]*[\w@?^=%&\/~+#-]) => from / onward
+
+TIME = re.compile(r"(?:PT)(?:(\d+)(?:H))?(?:(\d+)(?:M))?(?:(\d+)(?:S))?")
+# Typical string comes in as PT<number>H<number>M<number>S with numbers at the underscores.
+# If any are 0 that section is excluded, e.g 0:42:0 would be PT42M.
+# Groups are set up to only capture the numbers.
+# (:?(\d+)(?:<letter>))? => non-capture group of capture numbers and non-capture letter.
+
 
 CTC_LATEST = Path("videos.json")
 
@@ -71,14 +79,19 @@ class Video(NamedTuple):
 
     title: str
     sudoku_link: str
-    duration: time.struct_time
+    duration: timedelta
     youtube_id: str
 
     def message(self) -> str:
         return (
             f"The latest video {self.title} (https://www.youtube.com/watch?v={self.youtube_id}) "
-            f"for {self.sudoku_link}) took {time.strftime('%H:%M:%S', self.duration)}"
+            f"took {self.pretty_time()} for puzzle:\n{self.sudoku_link} "
         )
+
+    def pretty_time(self) -> str:
+        (hours, seconds_rem) = divmod(self.duration.total_seconds(), 3600)
+        (minutes, seconds) = divmod(seconds_rem, 60)
+        return f"{hours}:{minutes}:{seconds}"
 
     @classmethod
     def from_id(cls, video_id: str) -> Video:
@@ -145,17 +158,21 @@ def get_data(payload: str) -> dict[str, Any]:
     )["items"][0]
 
 
-def get_time(runtime: str) -> time.struct_time:
+def get_time(runtime: str) -> timedelta:
     """
     Convert the runtime string into a struct_time
     """
-    try:
-        return time.strptime(runtime, "PT%HH%MM%SS")
-    except ValueError:
-        try:
-            return time.strptime(runtime, "PT%MM%SS")
-        except ValueError:
-            return time.strptime(runtime, "PT%SS")
+    time_delta = timedelta(seconds=0)
+    ma = TIME.match(runtime)
+    if ma is None:
+        return time_delta
+    if (hours := ma.group(1)) is not None:
+        time_delta += timedelta(hours=int(hours))
+    if (minutes := ma.group(2)) is not None:
+        time_delta += timedelta(minutes=int(minutes))
+    if (seconds := ma.group(3)) is not None:
+        time_delta += timedelta(seconds=int(seconds))
+    return time_delta
 
 
 def write_out(channel: str, video: str):
