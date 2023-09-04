@@ -59,9 +59,9 @@ def mainloop():
         try:
             last_video = get_latest_video(channel_id=channel)
             if (
-                "crossword" not in last_video.title.lower()
+                last_video.youtube_id != current.youtube_id
+                and "crossword" not in last_video.title.lower()
                 and "wordle" not in last_video.title.lower()
-                and last_video.youtube_id != current.youtube_id
             ):
                 atexit.unregister(write_out)
                 current = last_video
