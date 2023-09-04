@@ -3,6 +3,7 @@
 client_secrets.json
 videos.json
 __pycache__/
+.hypothesis/
 
 # Added by cargo
 
