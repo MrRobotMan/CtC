@@ -84,7 +84,7 @@ class Video(NamedTuple):
 
     def message(self) -> str:
         return (
-            f"Video:{self.title} (https://www.youtube.com/watch?v={self.youtube_id})\n"
+            f"Video: {self.title} (https://www.youtube.com/watch?v={self.youtube_id})\n"
             f"Time: {self.pretty_time()}\n"
             f"Puzzle: {self.sudoku_link}"
         )
@@ -92,7 +92,7 @@ class Video(NamedTuple):
     def pretty_time(self) -> str:
         (hours, seconds_rem) = divmod(int(self.duration.total_seconds()), 3600)
         (minutes, seconds) = divmod(seconds_rem, 60)
-        return f"{hours}:{minutes}:{seconds}"
+        return f"{hours}:{minutes:02}:{seconds:02}"
 
     @classmethod
     def from_id(cls, video_id: str) -> Video:
