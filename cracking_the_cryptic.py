@@ -4,17 +4,18 @@ Get the data on the latest cracking the cryptic video.
 
 from __future__ import annotations
 
-import atexit
 import json
 import os
 import re
 import smtplib
 import ssl
-import time
 from datetime import timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, NamedTuple
+import asyncio
+from dataclasses import dataclass
+from html.parser import HTMLParser
 
 import requests
 from dotenv import load_dotenv
@@ -27,6 +28,8 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
 BASE_URL = "https://youtube.googleapis.com/youtube/v3"
+SANDRA_AND_NALA = "https://logic-masters.de/Raetselportal/Suche/erweitert.php?suchautor=SandraNala&suchverhalt=nichtgeloest"
+DAY = 3600 * 24
 
 URL_PATTERN = re.compile(
     R"(https?):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-]*[\w@?^=%&\/~+#-])"
@@ -49,27 +52,54 @@ TIME = re.compile(r"(?:PT)(?:(\d+)(?:H))?(?:(\d+)(?:M))?(?:(\d+)(?:S))?")
 CTC_LATEST = Path("videos.json")
 
 
-def mainloop():
+async def mainloop():
+    """
+    Tool to get the latest Sudoku from CrackingTheCryptic and Sandra&Nala
+    """
+    await asyncio.wait(
+        [
+            asyncio.create_task(ctc_mainloop()),
+            asyncio.create_task(sandra_and_nala_mainloop()),
+        ]
+    )
+
+
+async def ctc_mainloop():
     """
     Tool to get the latest Sudoku from CrackingTheCryptic
     """
-    (channel, current) = initialize()
-    current = Video.from_id(current)
+    (channel, current) = await initialize()
+    current = await Video.from_id(current)
     while True:
-        try:
-            last_video = get_latest_video(channel_id=channel)
-            if (
-                last_video.youtube_id != current.youtube_id
-                and "crossword" not in last_video.title.lower()
-                and "wordle" not in last_video.title.lower()
-            ):
-                atexit.unregister(write_out)
-                current = last_video
-                send_email(current.message())
-                atexit.register(write_out, channel, current.youtube_id)
-            time.sleep(600)
-        except KeyboardInterrupt:
-            return
+        last_video = await get_latest_video(channel_id=channel)
+        if (
+            last_video.youtube_id != current.youtube_id
+            and "crossword" not in last_video.title.lower()
+            and "wordle" not in last_video.title.lower()
+        ):
+            current = last_video
+            await send_email("Cracking the Cryptic Video", current.message())
+            await write_out(channel, current.youtube_id)
+        await asyncio.sleep(600)
+
+
+async def sandra_and_nala_mainloop():
+    """
+    Tool to get the latest Sudoku from Sandra & Nala
+    """
+    current = Link()
+    while True:
+        response = requests.get(SANDRA_AND_NALA)
+        if not response.ok:
+            continue
+        latest = await get_latest(response.text)
+        if latest != current:
+            current = latest
+            await send_email(
+                f"New Sandra and Nala Sudoku: {current.title}",
+                f"Try Sandra & Nala's puzzle {current.title}, {current.url}",
+            )
+        await asyncio.sleep(DAY)
 
 
 class Video(NamedTuple):
@@ -95,9 +125,9 @@ class Video(NamedTuple):
         return f"{hours}:{minutes:02}:{seconds:02}"
 
     @classmethod
-    def from_id(cls, video_id: str) -> Video:
-        data = get_data(f"videos?part=snippet%2CcontentDetails&id={video_id}")
-        run_time = get_time(data["contentDetails"]["duration"])
+    async def from_id(cls, video_id: str) -> Video:
+        data = await get_data(f"videos?part=snippet%2CcontentDetails&id={video_id}")
+        run_time = await get_time(data["contentDetails"]["duration"])
         description = data["snippet"]["description"]
         title = data["snippet"]["title"]
 
@@ -115,30 +145,30 @@ class Video(NamedTuple):
         return cls(title=title, sudoku_link=url, duration=run_time, youtube_id=video_id)
 
 
-def get_latest_video(channel_id: str) -> Video:
+async def get_latest_video(channel_id: str) -> Video:
     """
     Get the latest video published from the channel
     """
 
-    channel = get_data(f"channels?part=contentDetails&id={channel_id}")
+    channel = await get_data(f"channels?part=contentDetails&id={channel_id}")
 
     playlist_id = channel["contentDetails"]["relatedPlaylists"]["uploads"]
 
-    video = get_data(
+    video = await get_data(
         f"playlistItems?part=snippet%2CcontentDetails&maxResults=1&playlistId={playlist_id}"
     )
 
     latest_id = video["contentDetails"]["videoId"]
 
-    return Video.from_id(latest_id)
+    return await Video.from_id(latest_id)
 
 
-def send_email(message: str):
+async def send_email(subject: str, message: str):
     """
     Send an email with the latest video information.
     """
     msg = MIMEText(message)
-    msg["Subject"] = "Cracking the Cryptic Video"
+    msg["Subject"] = subject
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_USER
 
@@ -150,7 +180,7 @@ def send_email(message: str):
     server.quit()
 
 
-def get_data(payload: str) -> dict[str, Any]:
+async def get_data(payload: str) -> dict[str, Any]:
     """
     Gather the useful information from the JSON object as a dictionary.
     """
@@ -159,7 +189,7 @@ def get_data(payload: str) -> dict[str, Any]:
     )["items"][0]
 
 
-def get_time(runtime: str) -> timedelta:
+async def get_time(runtime: str) -> timedelta:
     """
     Convert the runtime string into a struct_time
     """
@@ -176,7 +206,7 @@ def get_time(runtime: str) -> timedelta:
     return time_delta
 
 
-def write_out(channel: str, video: str):
+async def write_out(channel: str, video: str):
     """
     Write the last video to disk
     """
@@ -184,7 +214,7 @@ def write_out(channel: str, video: str):
         json.dump({"channel": channel, "last_id": video}, out, indent=2)
 
 
-def initialize() -> tuple[str, str]:
+async def initialize() -> tuple[str, str]:
     """
     Retrieve the last video found
     """
@@ -193,5 +223,46 @@ def initialize() -> tuple[str, str]:
     return data["channel"], data["last_id"]
 
 
+class LogicMastersParser(HTMLParser):
+    def __init__(self):
+        self.links: list[Link] = []
+        self.table_found: bool = False
+        self.current: Link = Link()
+        super().__init__()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        if tag == "table":
+            self.table_found = True
+
+        if self.table_found and tag == "a":
+            for attr in attrs:
+                if attr[1]:
+                    self.current.url = attr[1]
+
+    def handle_endtag(self, tag: str):
+        if self.table_found and tag == "a":
+            self.links.append(self.current)
+            self.current = Link()
+
+    def handle_data(self, data: str):
+        if self.table_found:
+            self.current.title = data
+
+    def __str__(self):
+        return str(self.links[0])
+
+
+@dataclass
+class Link:
+    url: str = ""
+    title: str = ""
+
+
+async def get_latest(html: str) -> Link:
+    parser = LogicMastersParser()
+    parser.feed(html)
+    return parser.links[0]
+
+
 if __name__ == "__main__":
-    mainloop()
+    asyncio.run(mainloop())
