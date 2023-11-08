@@ -16,18 +16,9 @@ from typing import Any, NamedTuple
 import asyncio
 from dataclasses import dataclass
 from html.parser import HTMLParser
-import logging
 
 import requests
 from dotenv import load_dotenv
-
-LOGGER = logging.getLogger()
-handler = logging.FileHandler("ctc.long", encoding="utf8")
-formatter = logging.Formatter("%(asctime)s - %(message)s")
-handler.setFormatter(formatter)
-handler.setLevel(logging.INFO)
-LOGGER.addHandler(handler)
-LOGGER.setLevel(logging.INFO)
 
 
 load_dotenv()
@@ -66,12 +57,10 @@ async def mainloop():
     """
     Tool to get the latest Sudoku from CrackingTheCryptic and Sandra&Nala
     """
-    await asyncio.wait(
-        [
-            asyncio.create_task(ctc_mainloop()),
-            asyncio.create_task(sandra_and_nala_mainloop()),
-        ]
-    )
+    ctc = asyncio.create_task(ctc_mainloop())
+    lmd = asyncio.create_task(sandra_and_nala_mainloop())
+    await ctc
+    await lmd
 
 
 async def ctc_mainloop():
@@ -177,7 +166,6 @@ async def send_email(subject: str, message: str):
     """
     Send an email with the latest video information.
     """
-    LOGGER.info("Sent message with subject %s", subject)
     msg = MIMEText(message)
     msg["Subject"] = subject
     msg["From"] = EMAIL_USER

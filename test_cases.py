@@ -1,5 +1,5 @@
 from datetime import timedelta
-
+import asyncio
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -50,7 +50,7 @@ def test_rand(hours: int, minutes: int, seconds: int):
 
 def test_got_video():
     video_id = "39oIdXDf3J4"
-    actual = ctc.Video.from_id(video_id)
+    actual = asyncio.run(ctc.Video.from_id(video_id))
     assert actual.pretty_time() == "0:44:53"
     expected = ctc.Video(
         title="Sudoku, Gauss & Parity",
