@@ -20,6 +20,16 @@ from html.parser import HTMLParser
 import requests
 from dotenv import load_dotenv
 
+import logging
+
+handler = logging.FileHandler("ctc.log", encoding="utf8")
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+handler.setFormatter(formatter)
+LOGGER = logging.getLogger()
+LOGGER.setLevel(logging.INFO)
+LOGGER.addHandler(handler)
+
 
 load_dotenv()
 API_KEY = os.environ["YOUTUBE_KEY"]
@@ -89,15 +99,16 @@ async def sandra_and_nala_mainloop():
     current = Link()
     while True:
         response = requests.get(SANDRA_AND_NALA)
-        if not response.ok:
-            continue
-        latest = await get_latest(response.text)
-        if latest != current:
-            current = latest
-            await send_email(
-                f"New Sandra and Nala Sudoku: {current.title}",
-                f"Try Sandra & Nala's puzzle {current.title}, {current.url}",
-            )
+        if response.ok:
+            latest = await get_latest(response.text)
+            LOGGER.info(latest)
+            LOGGER.info(current)
+            if latest != current:
+                current = latest
+                await send_email(
+                    f"New Sandra and Nala Sudoku: {current.title}",
+                    f"Try Sandra & Nala's puzzle {current.title}, https://logic-masters.de{current.url}",
+                )
         await asyncio.sleep(DAY)
 
 
