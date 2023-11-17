@@ -40,7 +40,7 @@ SMTP_PORT = 587
 
 BASE_URL = "https://youtube.googleapis.com/youtube/v3"
 SANDRA_AND_NALA = "https://logic-masters.de/Raetselportal/Suche/erweitert.php?suchautor=SandraNala&suchverhalt=nichtgeloest"
-DAY = 3600 * 24
+DAY = 60 * 60 * 24
 
 URL_PATTERN = re.compile(
     R"(https?):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-]*[\w@?^=%&\/~+#-])"
@@ -67,49 +67,56 @@ async def mainloop():
     """
     Tool to get the latest Sudoku from CrackingTheCryptic and Sandra&Nala
     """
-    ctc = asyncio.create_task(ctc_mainloop())
-    lmd = asyncio.create_task(sandra_and_nala_mainloop())
+    (channel, video_id) = await initialize()
+    ctc_video = await Video.from_id(video_id)
+    sandra_and_nala = Link()
+    current = Current(ctc_video, sandra_and_nala)
+    ctc = asyncio.create_task(ctc_mainloop(current, channel))
+    lmd = asyncio.create_task(sandra_and_nala_mainloop(current))
     await ctc
     await lmd
 
 
-async def ctc_mainloop():
+async def ctc_mainloop(current: Current, channel: str):
     """
     Tool to get the latest Sudoku from CrackingTheCryptic
     """
-    (channel, current) = await initialize()
-    current = await Video.from_id(current)
     while True:
         last_video = await get_latest_video(channel_id=channel)
         if (
-            last_video.youtube_id != current.youtube_id
+            last_video.youtube_id != current.ctc.youtube_id
             and "crossword" not in last_video.title.lower()
             and "wordle" not in last_video.title.lower()
         ):
-            current = last_video
-            await send_email("Cracking the Cryptic Video", current.message())
-            await write_out(channel, current.youtube_id)
+            current.ctc = last_video
+            await send_email("Cracking the Cryptic Video", current.ctc.message())
+            await write_out(channel, current.ctc.youtube_id)
         await asyncio.sleep(60)
 
 
-async def sandra_and_nala_mainloop():
+async def sandra_and_nala_mainloop(current: Current):
     """
     Tool to get the latest Sudoku from Sandra & Nala
     """
-    current = Link()
     while True:
         response = requests.get(SANDRA_AND_NALA)
         if response.ok:
             latest = await get_latest(response.text)
             LOGGER.info(latest)
-            LOGGER.info(current)
-            if latest != current:
-                current = latest
+            LOGGER.info(current.sandra_and_nala)
+            if latest != current.sandra_and_nala:
+                current.sandra_and_nala = latest
                 await send_email(
-                    f"New Sandra and Nala Sudoku: {current.title}",
-                    f"Try Sandra & Nala's puzzle {current.title}, https://logic-masters.de{current.url}",
+                    f"New Sandra and Nala Sudoku: {current.sandra_and_nala.title}",
+                    f"Try Sandra & Nala's puzzle {current.sandra_and_nala.title}, https://logic-masters.de{current.sandra_and_nala.url}",
                 )
         await asyncio.sleep(DAY)
+
+
+@dataclass
+class Current:
+    ctc: Video
+    sandra_and_nala: Link
 
 
 class Video(NamedTuple):
