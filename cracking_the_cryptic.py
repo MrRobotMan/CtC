@@ -61,13 +61,18 @@ TIME = re.compile(r"(?:PT)(?:(\d+)(?:H))?(?:(\d+)(?:M))?(?:(\d+)(?:S))?")
 
 
 CTC_LATEST = Path("videos.json")
+SANDRA_AND_NALA_LATEST = Path("lmd.json")
 
 
 async def mainloop():
     """
     Tool to get the latest Sudoku from CrackingTheCryptic and Sandra&Nala
     """
-    (channel, video_id) = await initialize()
+    data = await read_data(CTC_LATEST)
+    channel = data["channel"]
+    channel = channel if isinstance(channel, str) else ""
+    video_id = data["last_id"]
+    video_id = video_id if isinstance(video_id, str) else ""
     ctc_video = await Video.from_id(video_id)
     sandra_and_nala = Link()
     current = Current(ctc_video, sandra_and_nala)
@@ -90,7 +95,9 @@ async def ctc_mainloop(current: Current, channel: str):
         ):
             current.ctc = last_video
             await send_email("Cracking the Cryptic Video", current.ctc.message())
-            await write_out(channel, current.ctc.youtube_id)
+            await write_out(
+                {"channel": channel, "last_id": current.ctc.youtube_id}, CTC_LATEST
+            )
         await asyncio.sleep(60)
 
 
@@ -102,10 +109,12 @@ async def sandra_and_nala_mainloop(current: Current):
         response = requests.get(SANDRA_AND_NALA)
         if response.ok:
             latest = await get_latest(response.text)
-            LOGGER.info(latest)
-            LOGGER.info(current.sandra_and_nala)
-            if latest != current.sandra_and_nala:
+            from_disk = Link.from_file(
+                (await read_data(SANDRA_AND_NALA_LATEST))["sandra and nala"]
+            )
+            if latest != from_disk:
                 current.sandra_and_nala = latest
+                await write_out(latest.to_json, SANDRA_AND_NALA_LATEST)
                 await send_email(
                     f"New Sandra and Nala Sudoku: {current.sandra_and_nala.title}",
                     f"Try Sandra & Nala's puzzle {current.sandra_and_nala.title}, https://logic-masters.de{current.sandra_and_nala.url}",
@@ -223,21 +232,20 @@ async def get_time(runtime: str) -> timedelta:
     return time_delta
 
 
-async def write_out(channel: str, video: str):
+async def write_out(data: Any, file: Path):
     """
     Write the last video to disk
     """
-    with CTC_LATEST.open("w", encoding="utf8") as out:
-        json.dump({"channel": channel, "last_id": video}, out, indent=2)
+    with file.open("w", encoding="utf8") as out:
+        json.dump(data, out, indent=2)
 
 
-async def initialize() -> tuple[str, str]:
+async def read_data(file: Path) -> dict[str, str | dict[str, str]]:
     """
-    Retrieve the last video found
+    Read stored data.
     """
-    with CTC_LATEST.open("r", encoding="utf8") as file:
-        data = json.load(file)
-    return data["channel"], data["last_id"]
+    with file.open("r", encoding="utf8") as fp:
+        return json.load(fp)
 
 
 class LogicMastersParser(HTMLParser):
@@ -273,6 +281,18 @@ class LogicMastersParser(HTMLParser):
 class Link:
     url: str = ""
     title: str = ""
+
+    @staticmethod
+    def from_file(data: str | dict[str, str]) -> Link:
+        if isinstance(data, str):
+            url, title = data.split(" ")
+        else:
+            url = data["url"]
+            title = data["title"]
+        return Link(url, title)
+
+    def to_json(self) -> dict[str, str]:
+        return {"url": self.url, "title": self.title}
 
 
 async def get_latest(html: str) -> Link:
