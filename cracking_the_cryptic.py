@@ -109,12 +109,13 @@ async def sandra_and_nala_mainloop(current: Current):
         response = requests.get(SANDRA_AND_NALA)
         if response.ok:
             latest = await get_latest(response.text)
-            from_disk = Link.from_file(
-                (await read_data(SANDRA_AND_NALA_LATEST))["sandra and nala"]
-            )
+            data = await read_data(SANDRA_AND_NALA_LATEST)
+            from_disk = Link.from_file(data["sandra and nala"])
             if latest != from_disk:
                 current.sandra_and_nala = latest
-                await write_out(latest.to_json, SANDRA_AND_NALA_LATEST)
+                await write_out(
+                    {"sandra and nala": latest.to_json}, SANDRA_AND_NALA_LATEST
+                )
                 await send_email(
                     f"New Sandra and Nala Sudoku: {current.sandra_and_nala.title}",
                     f"Try Sandra & Nala's puzzle {current.sandra_and_nala.title}, https://logic-masters.de{current.sandra_and_nala.url}",
@@ -285,8 +286,10 @@ class Link:
     @staticmethod
     def from_file(data: str | dict[str, str]) -> Link:
         if isinstance(data, str):
+            print("string")
             url, title = data.split(" ")
         else:
+            print("dict")
             url = data["url"]
             title = data["title"]
         return Link(url, title)

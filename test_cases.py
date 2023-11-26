@@ -7,27 +7,29 @@ import cracking_the_cryptic as ctc
 
 
 def test_gathered_time_all():
-    assert ctc.get_time("PT1H42M12S") == timedelta(hours=1, minutes=42, seconds=12)
+    assert asyncio.run(ctc.get_time("PT1H42M12S")) == timedelta(
+        hours=1, minutes=42, seconds=12
+    )
 
 
 def test_gathered_time_hours():
-    assert ctc.get_time("PT1H") == timedelta(hours=1)
+    assert asyncio.run(ctc.get_time("PT1H")) == timedelta(hours=1)
 
 
 def test_gathered_time_minutes():
-    assert ctc.get_time("PT42M") == timedelta(minutes=42)
+    assert asyncio.run(ctc.get_time("PT42M")) == timedelta(minutes=42)
 
 
 def test_gathered_time_seconds():
-    assert ctc.get_time("PT12S") == timedelta(seconds=12)
+    assert asyncio.run(ctc.get_time("PT12S")) == timedelta(seconds=12)
 
 
 def test_gathered_time_minutes_second():
-    assert ctc.get_time("PT42M12S") == timedelta(minutes=42, seconds=12)
+    assert asyncio.run(ctc.get_time("PT42M12S")) == timedelta(minutes=42, seconds=12)
 
 
 def test_bad_string():
-    assert ctc.get_time("") == timedelta(seconds=0)
+    assert asyncio.run(ctc.get_time("")) == timedelta(seconds=0)
 
 
 @given(
@@ -43,7 +45,7 @@ def test_rand(hours: int, minutes: int, seconds: int):
         time_code += f"{minutes}M"
     if seconds > 0:
         time_code += f"{seconds}S"
-    assert ctc.get_time(time_code) == timedelta(
+    assert asyncio.run(ctc.get_time(time_code)) == timedelta(
         hours=hours, minutes=minutes, seconds=seconds
     )
 
@@ -59,3 +61,19 @@ def test_got_video():
         youtube_id=video_id,
     )
     assert actual == expected
+
+
+def test_sandra_and_nala_from_disk():
+    data = {
+        "url": "/Raetselportal/Raetsel/zeigen.php?id=000FXX",
+        "title": "Nala’s Advent(ures) Calendar 2023",
+    }
+    assert ctc.Link(data["url"], data["title"]) == ctc.Link.from_file(data)
+
+
+def test_sandra_and_nala_from_disk_empty():
+    data = {
+        "url": "",
+        "title": "",
+    }
+    assert ctc.Link(data["url"], data["title"]) == ctc.Link.from_file(data)
