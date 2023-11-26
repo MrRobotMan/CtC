@@ -94,6 +94,7 @@ async def ctc_mainloop(current: Current, channel: str):
             and "wordle" not in last_video.title.lower()
         ):
             current.ctc = last_video
+            LOGGER.info("CTC: %s", last_video)
             await send_email("Cracking the Cryptic Video", current.ctc.message())
             await write_out(
                 {"channel": channel, "last_id": current.ctc.youtube_id}, CTC_LATEST
@@ -113,8 +114,9 @@ async def sandra_and_nala_mainloop(current: Current):
             from_disk = Link.from_file(data["sandra and nala"])
             if latest != from_disk:
                 current.sandra_and_nala = latest
+                LOGGER.info("LMD: %s", latest)
                 await write_out(
-                    {"sandra and nala": latest.to_json}, SANDRA_AND_NALA_LATEST
+                    {"sandra and nala": latest.to_json()}, SANDRA_AND_NALA_LATEST
                 )
                 await send_email(
                     f"New Sandra and Nala Sudoku: {current.sandra_and_nala.title}",
@@ -237,6 +239,7 @@ async def write_out(data: Any, file: Path):
     """
     Write the last video to disk
     """
+    print(data)
     with file.open("w", encoding="utf8") as out:
         json.dump(data, out, indent=2)
 
