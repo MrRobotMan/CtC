@@ -8,9 +8,8 @@ import json
 import os
 import re
 import smtplib
-import ssl
 from datetime import timedelta
-from email.mime.text import MIMEText
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, NamedTuple
 import asyncio
@@ -18,7 +17,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 
 import requests
-from dotenv import load_dotenv
+import dotenv
 
 import logging
 
@@ -31,12 +30,13 @@ LOGGER.setLevel(logging.INFO)
 LOGGER.addHandler(handler)
 
 
-load_dotenv()
+dotenv.load_dotenv()
 API_KEY = os.environ["YOUTUBE_KEY"]
 EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
+PHONE = os.environ["PHONE"]
 SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
+SMTP_PORT = 465
 
 BASE_URL = "https://youtube.googleapis.com/youtube/v3"
 SANDRA_AND_NALA = "https://logic-masters.de/Raetselportal/Suche/erweitert.php?suchautor=SandraNala&suchverhalt=nichtgeloest"
@@ -75,7 +75,7 @@ async def mainloop():
     video_id = video_id if isinstance(video_id, str) else ""
     ctc_video = await Video.from_id(video_id)
     sandra_and_nala = Link()
-    current = Current(ctc_video, sandra_and_nala)
+    current = Current(ctc_video, channel, sandra_and_nala)
     ctc = asyncio.create_task(ctc_mainloop(current, channel))
     lmd = asyncio.create_task(sandra_and_nala_mainloop(current))
     await ctc
@@ -90,15 +90,17 @@ async def ctc_mainloop(current: Current, channel: str):
         last_video = await get_latest_video(channel_id=channel)
         if (
             last_video.youtube_id != current.ctc.youtube_id
-            and "crossword" not in last_video.title.lower()
-            and "wordle" not in last_video.title.lower()
+            and last_video.title.lower() not in ("crossword", "wordle", "sudouku experts play")
+            and last_video.duration > timedelta(seconds=0)
         ):
-            current.ctc = last_video
+            await current.update(last_video)
             LOGGER.info("CTC: %s", last_video)
-            await send_email("Cracking the Cryptic Video", current.ctc.message())
-            await write_out(
-                {"channel": channel, "last_id": current.ctc.youtube_id}, CTC_LATEST
-            )
+            if len(current.ctc.sudoku_links) > 1:
+                await send_email("Cracking the Cryptic Video", current.ctc.message(), EMAIL_USER)
+            else:
+                await send_email(
+                    None, f"{current.ctc.sudoku_links[0]} ({current.ctc.pretty_time()})", PHONE
+                )
         await asyncio.sleep(60)
 
 
@@ -113,14 +115,12 @@ async def sandra_and_nala_mainloop(current: Current):
             data = await read_data(SANDRA_AND_NALA_LATEST)
             from_disk = Link.from_file(data["sandra and nala"])
             if latest != from_disk:
-                current.sandra_and_nala = latest
+                await current.update(latest)
                 LOGGER.info("LMD: %s", latest)
-                await write_out(
-                    {"sandra and nala": latest.to_json()}, SANDRA_AND_NALA_LATEST
-                )
                 await send_email(
                     f"New Sandra and Nala Sudoku: {current.sandra_and_nala.title}",
                     f"Try Sandra & Nala's puzzle {current.sandra_and_nala.title}, https://logic-masters.de{current.sandra_and_nala.url}",
+                    EMAIL_USER,
                 )
         await asyncio.sleep(DAY)
 
@@ -128,7 +128,17 @@ async def sandra_and_nala_mainloop(current: Current):
 @dataclass
 class Current:
     ctc: Video
+    channel: str
     sandra_and_nala: Link
+
+    async def update(self, vid: Video | Link):
+        match vid:
+            case Video():
+                self.ctc = vid
+                await write_out({"channel": self.channel, "last_id": vid.youtube_id}, CTC_LATEST)
+            case Link():
+                self.sandra_and_nala = vid
+                await write_out({"sandra and nala": vid.to_json()}, SANDRA_AND_NALA_LATEST)
 
 
 class Video(NamedTuple):
@@ -137,15 +147,16 @@ class Video(NamedTuple):
     """
 
     title: str
-    sudoku_link: str
+    sudoku_links: list[str]
     duration: timedelta
     youtube_id: str
 
     def message(self) -> str:
+        links = "\n".join(l for l in self.sudoku_links)
         return (
             f"Video: {self.title} (https://www.youtube.com/watch?v={self.youtube_id})\n"
             f"Time: {self.pretty_time()}\n"
-            f"Puzzle: {self.sudoku_link}"
+            f"Puzzle: {links}"
         )
 
     def pretty_time(self) -> str:
@@ -168,10 +179,11 @@ class Video(NamedTuple):
             or "crackingthecryptic.com" in lnk
         ]
         if not urls:
-            url = ""
-        else:
-            url = urls[0]
-        return cls(title=title, sudoku_link=url, duration=run_time, youtube_id=video_id)
+            urls = [""]
+        for lnk in ("https://tinyurl.com/CTCCatalogue", "https://crackingthecryptic.com/#apps"):
+            if lnk in urls:
+                urls.remove(lnk)
+        return cls(title=title, sudoku_links=urls, duration=run_time, youtube_id=video_id)
 
 
 async def get_latest_video(channel_id: str) -> Video:
@@ -192,30 +204,30 @@ async def get_latest_video(channel_id: str) -> Video:
     return await Video.from_id(latest_id)
 
 
-async def send_email(subject: str, message: str):
+async def send_email(subject: str | None, message: str, receiver: str):
     """
     Send an email with the latest video information.
     """
-    msg = MIMEText(message)
-    msg["Subject"] = subject
+    msg = EmailMessage()
+    if subject:
+        msg["Subject"] = subject
     msg["From"] = EMAIL_USER
-    msg["To"] = EMAIL_USER
+    msg["To"] = receiver
+    msg.set_content(message)
 
-    context = ssl.create_default_context()
-    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-    server.starttls(context=context)
-    server.login(EMAIL_USER, EMAIL_PASSWORD)
-    server.send_message(msg)
-    server.quit()
+    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as smtp:
+        smtp.login(EMAIL_USER, EMAIL_PASSWORD)
+        smtp.send_message(msg)
+        LOGGER.info(f"sent {msg}")
 
 
 async def get_data(payload: str) -> dict[str, Any]:
     """
     Gather the useful information from the JSON object as a dictionary.
     """
-    return json.loads(
-        requests.get(f"{BASE_URL}/{payload}&key={API_KEY}", timeout=5).text
-    )["items"][0]
+    return json.loads(requests.get(f"{BASE_URL}/{payload}&key={API_KEY}", timeout=5).text)["items"][
+        0
+    ]
 
 
 async def get_time(runtime: str) -> timedelta:

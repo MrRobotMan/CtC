@@ -2,6 +2,7 @@
 .venv/
 client_secrets.json
 *.json
+*.log
 __pycache__/
 .hypothesis/
 
