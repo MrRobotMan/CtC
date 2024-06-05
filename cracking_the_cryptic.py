@@ -88,19 +88,18 @@ async def ctc_mainloop(current: Current, channel: str):
     """
     while True:
         last_video = await get_latest_video(channel_id=channel)
-        if (
-            last_video.youtube_id != current.ctc.youtube_id
-            and last_video.title.lower() not in ("crossword", "wordle", "sudouku experts play")
-            and last_video.duration > timedelta(seconds=0)
-        ):
+        if last_video.youtube_id != current.ctc.youtube_id and last_video.is_valid():
             await current.update(last_video)
             LOGGER.info("CTC: %s", last_video)
-            if len(current.ctc.sudoku_links) > 1:
-                await send_email("Cracking the Cryptic Video", current.ctc.message(), EMAIL_USER)
-            else:
-                await send_email(
-                    None, f"{current.ctc.sudoku_links[0]} ({current.ctc.pretty_time()})", PHONE
-                )
+            await send_email(None, f"{current.ctc.title} - {current.ctc.pretty_time()}", PHONE)
+            for link in current.ctc.sudoku_links:
+                await send_email(None, link, PHONE)
+            # if len(current.ctc.sudoku_links) > 1:
+            #     await send_email("Cracking the Cryptic Video", current.ctc.message(), EMAIL_USER)
+            # else:
+            #     await send_email(
+            #         None, f"{current.ctc.sudoku_links[0]} ({current.ctc.pretty_time()})", PHONE
+            #     )
         await asyncio.sleep(60)
 
 
@@ -163,6 +162,15 @@ class Video(NamedTuple):
         (hours, seconds_rem) = divmod(int(self.duration.total_seconds()), 3600)
         (minutes, seconds) = divmod(seconds_rem, 60)
         return f"{hours}:{minutes:02}:{seconds:02}"
+
+    def is_valid(self) -> bool:
+        title = self.title.lower()
+        return (
+            "crossword" not in title
+            and "wordle" not in title
+            and "sudouku experts play" not in title
+            and self.duration > timedelta(seconds=0)
+        )
 
     @classmethod
     async def from_id(cls, video_id: str) -> Video:
