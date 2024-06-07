@@ -91,9 +91,7 @@ async def ctc_mainloop(current: Current, channel: str):
         if last_video.youtube_id != current.ctc.youtube_id and last_video.is_valid():
             await current.update(last_video)
             LOGGER.info("CTC: %s", last_video)
-            await send_email(None, f"{current.ctc.title} - {current.ctc.pretty_time()}", PHONE)
-            for link in current.ctc.sudoku_links:
-                await send_email(None, link, PHONE)
+            await send_email(None, current.ctc.message(), PHONE)
             # if len(current.ctc.sudoku_links) > 1:
             #     await send_email("Cracking the Cryptic Video", current.ctc.message(), EMAIL_USER)
             # else:
