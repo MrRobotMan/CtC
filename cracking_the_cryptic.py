@@ -26,7 +26,7 @@ handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 LOGGER = logging.getLogger()
-LOGGER.setLevel(logging.INFO)
+LOGGER.setLevel(logging.ERROR)
 LOGGER.addHandler(handler)
 
 
@@ -92,12 +92,6 @@ async def ctc_mainloop(current: Current, channel: str):
             await current.update(last_video)
             LOGGER.info("CTC: %s", last_video)
             await send_email(None, current.ctc.message(), PHONE)
-            # if len(current.ctc.sudoku_links) > 1:
-            #     await send_email("Cracking the Cryptic Video", current.ctc.message(), EMAIL_USER)
-            # else:
-            #     await send_email(
-            #         None, f"{current.ctc.sudoku_links[0]} ({current.ctc.pretty_time()})", PHONE
-            #     )
         await asyncio.sleep(60)
 
 
@@ -166,7 +160,7 @@ class Video(NamedTuple):
         return (
             "crossword" not in title
             and "wordle" not in title
-            and "sudouku experts play" not in title
+            and "sudoku experts play" not in title
             and self.duration > timedelta(seconds=0)
         )
 
@@ -257,7 +251,6 @@ async def write_out(data: Any, file: Path):
     """
     Write the last video to disk
     """
-    print(data)
     with file.open("w", encoding="utf8") as out:
         json.dump(data, out, indent=2)
 
@@ -307,10 +300,8 @@ class Link:
     @staticmethod
     def from_file(data: str | dict[str, str]) -> Link:
         if isinstance(data, str):
-            print("string")
             url, title = data.split(" ")
         else:
-            print("dict")
             url = data["url"]
             title = data["title"]
         return Link(url, title)
