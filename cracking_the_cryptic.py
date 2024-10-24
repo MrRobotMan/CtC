@@ -22,13 +22,17 @@ import dotenv
 
 import logging
 
-handler = logging.FileHandler("ctc.log", encoding="utf8")
-handler.setLevel(logging.ERROR)
+error_handler = logging.FileHandler("ctc.log", encoding="utf8")
+error_handler.setLevel(logging.ERROR)
+stream_handler = logging.StreamHandler()
+stream_handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-handler.setFormatter(formatter)
+error_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
 LOGGER = logging.getLogger()
-LOGGER.setLevel(logging.ERROR)
-LOGGER.addHandler(handler)
+LOGGER.setLevel(logging.INFO)
+LOGGER.addHandler(error_handler)
+LOGGER.addHandler(stream_handler)
 
 
 dotenv.load_dotenv()
@@ -76,8 +80,9 @@ async def mainloop():
     video_id = data["last_id"]
     video_id = video_id if isinstance(video_id, str) else ""
     ctc_video = await Video.from_id(video_id)
-    sandra_and_nala = Link()
-    rat_run = Link()
+    lmd = await read_data(LMD_LATEST)
+    sandra_and_nala = Link.from_file(lmd.get("sandra and nala"))
+    rat_run = Link.from_file(lmd.get("rat run"))
     current = Current(ctc_video, channel, sandra_and_nala, rat_run)
     ctc = asyncio.create_task(ctc_mainloop(current, channel))
     lmd = asyncio.create_task(lmd_mainloop(current))
@@ -92,7 +97,7 @@ async def ctc_mainloop(current: Current, channel: str):
     while True:
         last_video = await get_latest_video(channel_id=channel)
         if last_video.youtube_id != current.ctc.youtube_id and last_video.is_valid():
-            await current.update(last_video)
+            await current.update(last_video, LogicMasters.NONE)
             LOGGER.info("CTC: %s", last_video)
             await send_email(None, current.ctc.message(), PHONE)
         await asyncio.sleep(60)
@@ -117,23 +122,17 @@ async def process_response(
 ) -> None:
     if response.ok:
         latest = await get_latest(response.text)
+        LOGGER.info(latest)
         data = await read_data(LMD_LATEST)
-        from_disk = Link.from_file(data[lmd.to_string()], lmd)
+        from_disk = Link.from_file(data.get(lmd.to_string()))
+        LOGGER.info(from_disk)
         if latest != from_disk:
             string = lmd.to_string().title()
-            match lmd:
-                case LogicMasters.SANDRAANDNALA:
-                    title, url = current.sandra_and_nala.title, current.sandra_and_nala.url
-                case LogicMasters.RATRUN:
-                    title, url = current.rat_run.title, current.rat_run.url
-                case LogicMasters.NONE:
-                    title, url = "", ""
-            latest.lmd = lmd
-            await current.update(latest)
+            await current.update(latest, lmd)
             LOGGER.info("LMD: %s", latest)
             await send_email(
-                f"New {string} Sudoku: {title}",
-                f"Try the new {string} puzzle {title}, https://logic-masters.de{url}",
+                f"New {string} Sudoku: {latest.title}",
+                f"Try the new {string} puzzle {latest.title}, https://logic-masters.de{latest.url}",
                 EMAIL_USER,
             )
 
@@ -145,17 +144,17 @@ class Current:
     sandra_and_nala: Link
     rat_run: Link
 
-    async def update(self, vid: Video | Link):
-        match vid:
+    async def update(self, item: Video | Link, lmd: LogicMasters):
+        match item:
             case Video():
-                self.ctc = vid
-                await write_out({"channel": self.channel, "last_id": vid.youtube_id}, CTC_LATEST)
-            case Link() as l:
-                match l.lmd:
+                self.ctc = item
+                await write_out({"channel": self.channel, "last_id": item.youtube_id}, CTC_LATEST)
+            case Link():
+                match lmd:
                     case LogicMasters.SANDRAANDNALA:
-                        self.sandra_and_nala = vid
+                        self.sandra_and_nala = item
                     case LogicMasters.RATRUN:
-                        self.rat_run = vid
+                        self.rat_run = item
                     case LogicMasters.NONE:
                         pass
                 await write_out(
@@ -346,16 +345,18 @@ class LogicMasters(Enum):
 class Link:
     url: str = ""
     title: str = ""
-    lmd: LogicMasters = LogicMasters.NONE
 
     @staticmethod
-    def from_file(data: str | dict[str, str], lmd: LogicMasters) -> Link:
-        if isinstance(data, str):
-            url, title = data.split(" ")
-        else:
-            url = data["url"]
-            title = data["title"]
-        return Link(url, title, lmd)
+    def from_file(data: str | dict[str, str] | None) -> Link:
+        match data:
+            case str():
+                url, title = data.split(" ")
+            case None:
+                url, title = "", ""
+            case _:
+                url = data["url"]
+                title = data["title"]
+        return Link(url, title)
 
     def to_json(self) -> dict[str, str]:
         return {"url": self.url, "title": self.title}
