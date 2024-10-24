@@ -8,6 +8,7 @@ import json
 import os
 import re
 import smtplib
+from enum import Enum, auto
 from datetime import timedelta
 from email.message import EmailMessage
 from pathlib import Path
@@ -22,7 +23,7 @@ import dotenv
 import logging
 
 handler = logging.FileHandler("ctc.log", encoding="utf8")
-handler.setLevel(logging.INFO)
+handler.setLevel(logging.ERROR)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 LOGGER = logging.getLogger()
@@ -40,6 +41,7 @@ SMTP_PORT = 465
 
 BASE_URL = "https://youtube.googleapis.com/youtube/v3"
 SANDRA_AND_NALA = "https://logic-masters.de/Raetselportal/Suche/erweitert.php?suchautor=SandraNala&suchverhalt=nichtgeloest"
+RAT_RUN = "https://logic-masters.de/Raetselportal/Suche/erweitert.php?skname=x&suchtext=rat%20run&suchautor=marty_sears"
 DAY = 60 * 60 * 24
 
 URL_PATTERN = re.compile(
@@ -61,7 +63,7 @@ TIME = re.compile(r"(?:PT)(?:(\d+)(?:H))?(?:(\d+)(?:M))?(?:(\d+)(?:S))?")
 
 
 CTC_LATEST = Path("videos.json")
-SANDRA_AND_NALA_LATEST = Path("lmd.json")
+LMD_LATEST = Path("lmd.json")
 
 
 async def mainloop():
@@ -75,9 +77,10 @@ async def mainloop():
     video_id = video_id if isinstance(video_id, str) else ""
     ctc_video = await Video.from_id(video_id)
     sandra_and_nala = Link()
-    current = Current(ctc_video, channel, sandra_and_nala)
+    rat_run = Link()
+    current = Current(ctc_video, channel, sandra_and_nala, rat_run)
     ctc = asyncio.create_task(ctc_mainloop(current, channel))
-    lmd = asyncio.create_task(sandra_and_nala_mainloop(current))
+    lmd = asyncio.create_task(lmd_mainloop(current))
     await ctc
     await lmd
 
@@ -95,25 +98,44 @@ async def ctc_mainloop(current: Current, channel: str):
         await asyncio.sleep(60)
 
 
-async def sandra_and_nala_mainloop(current: Current):
+async def lmd_mainloop(current: Current):
     """
     Tool to get the latest Sudoku from Sandra & Nala
     """
     while True:
-        response = requests.get(SANDRA_AND_NALA)
-        if response.ok:
-            latest = await get_latest(response.text)
-            data = await read_data(SANDRA_AND_NALA_LATEST)
-            from_disk = Link.from_file(data["sandra and nala"])
-            if latest != from_disk:
-                await current.update(latest)
-                LOGGER.info("LMD: %s", latest)
-                await send_email(
-                    f"New Sandra and Nala Sudoku: {current.sandra_and_nala.title}",
-                    f"Try Sandra & Nala's puzzle {current.sandra_and_nala.title}, https://logic-masters.de{current.sandra_and_nala.url}",
-                    EMAIL_USER,
-                )
+        responses = (
+            (requests.get(SANDRA_AND_NALA), LogicMasters.SANDRAANDNALA),
+            (requests.get(RAT_RUN), LogicMasters.RATRUN),
+        )
+        for response in responses:
+            await process_response(current, *response)
         await asyncio.sleep(DAY)
+
+
+async def process_response(
+    current: Current, response: requests.Response, lmd: LogicMasters
+) -> None:
+    if response.ok:
+        latest = await get_latest(response.text)
+        data = await read_data(LMD_LATEST)
+        from_disk = Link.from_file(data[lmd.to_string()], lmd)
+        if latest != from_disk:
+            string = lmd.to_string().title()
+            match lmd:
+                case LogicMasters.SANDRAANDNALA:
+                    title, url = current.sandra_and_nala.title, current.sandra_and_nala.url
+                case LogicMasters.RATRUN:
+                    title, url = current.rat_run.title, current.rat_run.url
+                case LogicMasters.NONE:
+                    title, url = "", ""
+            latest.lmd = lmd
+            await current.update(latest)
+            LOGGER.info("LMD: %s", latest)
+            await send_email(
+                f"New {string} Sudoku: {title}",
+                f"Try the new {string} puzzle {title}, https://logic-masters.de{url}",
+                EMAIL_USER,
+            )
 
 
 @dataclass
@@ -121,15 +143,28 @@ class Current:
     ctc: Video
     channel: str
     sandra_and_nala: Link
+    rat_run: Link
 
     async def update(self, vid: Video | Link):
         match vid:
             case Video():
                 self.ctc = vid
                 await write_out({"channel": self.channel, "last_id": vid.youtube_id}, CTC_LATEST)
-            case Link():
-                self.sandra_and_nala = vid
-                await write_out({"sandra and nala": vid.to_json()}, SANDRA_AND_NALA_LATEST)
+            case Link() as l:
+                match l.lmd:
+                    case LogicMasters.SANDRAANDNALA:
+                        self.sandra_and_nala = vid
+                    case LogicMasters.RATRUN:
+                        self.rat_run = vid
+                    case LogicMasters.NONE:
+                        pass
+                await write_out(
+                    {
+                        "sandra and nala": self.sandra_and_nala.to_json(),
+                        "rat run": self.rat_run.to_json(),
+                    },
+                    LMD_LATEST,
+                )
 
 
 class Video(NamedTuple):
@@ -292,19 +327,35 @@ class LogicMastersParser(HTMLParser):
         return str(self.links[0])
 
 
+class LogicMasters(Enum):
+    NONE = auto()
+    SANDRAANDNALA = auto()
+    RATRUN = auto()
+
+    def to_string(self) -> str:
+        match self:
+            case LogicMasters.NONE:
+                return ""
+            case LogicMasters.SANDRAANDNALA:
+                return "sandra and nala"
+            case LogicMasters.RATRUN:
+                return "rat run"
+
+
 @dataclass
 class Link:
     url: str = ""
     title: str = ""
+    lmd: LogicMasters = LogicMasters.NONE
 
     @staticmethod
-    def from_file(data: str | dict[str, str]) -> Link:
+    def from_file(data: str | dict[str, str], lmd: LogicMasters) -> Link:
         if isinstance(data, str):
             url, title = data.split(" ")
         else:
             url = data["url"]
             title = data["title"]
-        return Link(url, title)
+        return Link(url, title, lmd)
 
     def to_json(self) -> dict[str, str]:
         return {"url": self.url, "title": self.title}
