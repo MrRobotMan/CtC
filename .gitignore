@@ -5,7 +5,4 @@ client_secrets.json
 *.log
 __pycache__/
 .hypothesis/
-
-# Added by cargo
-
-/target
+update.ps1
