@@ -37,11 +37,12 @@ LOGGER.addHandler(stream_handler)
 
 dotenv.load_dotenv()
 API_KEY = os.environ["YOUTUBE_KEY"]
+SMTP_SERVER = os.environ["SMTP_SERVER"]
 EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
 PHONE = os.environ["PHONE"]
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465
+EMAIL_RECIPIENT = os.environ["EMAIL_RECIPIENT"]
+SMTP_PORT = 587
 
 BASE_URL = "https://youtube.googleapis.com/youtube/v3"
 SANDRA_AND_NALA = "https://logic-masters.de/Raetselportal/Suche/erweitert.php?suchautor=SandraNala&suchverhalt=nichtgeloest"
@@ -99,7 +100,7 @@ async def ctc_mainloop(current: Current, channel: str):
         if last_video.youtube_id != current.ctc.youtube_id and last_video.is_valid():
             await current.update(last_video, LogicMasters.NONE)
             LOGGER.info("CTC: %s", last_video)
-            await send_email(None, current.ctc.message(), PHONE)
+            await send_email(current.ctc.title, current.ctc.message(), EMAIL_RECIPIENT)
         await asyncio.sleep(60)
 
 
@@ -133,7 +134,7 @@ async def process_response(
             await send_email(
                 f"New {string} Sudoku: {latest.title}",
                 f"Try the new {string} puzzle {latest.title}, https://logic-masters.de{latest.url}",
-                EMAIL_USER,
+                EMAIL_RECIPIENT,
             )
 
 
@@ -177,7 +178,7 @@ class Video(NamedTuple):
     youtube_id: str
 
     def message(self) -> str:
-        links = "\n".join(l for l in self.sudoku_links)
+        links = "\n".join(lnk for lnk in self.sudoku_links)
         return (
             f"Video: {self.title} (https://www.youtube.com/watch?v={self.youtube_id})\n"
             f"Time: {self.pretty_time()}\n"
@@ -249,10 +250,13 @@ async def send_email(subject: str | None, message: str, receiver: str):
     msg["To"] = receiver
     msg.set_content(message)
 
-    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as smtp:
-        smtp.login(EMAIL_USER, EMAIL_PASSWORD)
-        smtp.send_message(msg)
-        LOGGER.info(f"sent {msg}")
+    smtp = smtplib.SMTP(SMTP_SERVER, 587)
+    smtp.ehlo()
+    smtp.starttls()
+    smtp.login(EMAIL_USER, EMAIL_PASSWORD)
+    smtp.send_message(msg)
+
+    LOGGER.info(f"sent {msg}")
 
 
 async def get_data(payload: str) -> dict[str, Any]:
