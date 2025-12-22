@@ -1,26 +1,23 @@
-"""
-Get the data on the latest cracking the cryptic video.
-"""
+"""Get the data on the latest cracking the cryptic video."""
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import smtplib
-from enum import Enum, auto
-from datetime import timedelta
-from email.message import EmailMessage
-from pathlib import Path
-from typing import Any, NamedTuple
 import asyncio
 from dataclasses import dataclass
+from datetime import timedelta
+from email.message import EmailMessage
+from enum import Enum, auto
 from html.parser import HTMLParser
-
-import requests
-import dotenv
-
+import json
 import logging
+import os
+from pathlib import Path
+import re
+import smtplib
+from typing import Any, NamedTuple
+
+import dotenv
+import httpx
 
 error_handler = logging.FileHandler("ctc.log", encoding="utf8")
 error_handler.setLevel(logging.ERROR)
@@ -69,19 +66,21 @@ TIME = re.compile(r"(?:PT)(?:(\d+)(?:H))?(?:(\d+)(?:M))?(?:(\d+)(?:S))?")
 
 CTC_LATEST = Path("videos.json")
 LMD_LATEST = Path("lmd.json")
+OK_RESPONSE = 200
 
 
-async def mainloop():
-    """
-    Tool to get the latest Sudoku from CrackingTheCryptic and Sandra&Nala
-    """
-    data = await read_data(CTC_LATEST)
+async def mainloop() -> None:
+    """Tool to get the latest Sudoku from CrackingTheCryptic and Sandra&Nala."""
+    data = read_data(CTC_LATEST)
     channel = data["channel"]
     channel = channel if isinstance(channel, str) else ""
     video_id = data["last_id"]
     video_id = video_id if isinstance(video_id, str) else ""
-    ctc_video = await Video.from_id(video_id)
-    lmd = await read_data(LMD_LATEST)
+    try:
+        ctc_video = await Video.from_id(video_id)
+    except BadVideoError:
+        ctc_video = Video("", [], timedelta(), "")
+    lmd = read_data(LMD_LATEST)
     sandra_and_nala = Link.from_file(lmd.get("sandra and nala"))
     rat_run = Link.from_file(lmd.get("rat run"))
     current = Current(ctc_video, channel, sandra_and_nala, rat_run)
@@ -91,47 +90,55 @@ async def mainloop():
     await lmd
 
 
-async def ctc_mainloop(current: Current, channel: str):
-    """
-    Tool to get the latest Sudoku from CrackingTheCryptic
-    """
+async def ctc_mainloop(current: Current, channel: str) -> None:
+    """Tool to get the latest Sudoku from CrackingTheCryptic."""
     while True:
-        last_video = await get_latest_video(channel_id=channel)
-        if last_video.youtube_id != current.ctc.youtube_id and last_video.is_valid():
-            await current.update(last_video, LogicMasters.NONE)
-            LOGGER.info("CTC: %s", last_video)
-            await send_email(current.ctc.title, current.ctc.message(), EMAIL_RECIPIENT)
-        await asyncio.sleep(60)
+        try:
+            last_video = await get_latest_video(channel_id=channel)
+        except BadVideoError:
+            pass
+        else:
+            if (
+                last_video.youtube_id != current.ctc.youtube_id
+                and last_video.is_valid()
+            ):
+                await current.update(last_video, LogicMasters.NONE)
+                LOGGER.info("CTC: %s", last_video)
+                send_email(current.ctc.title, current.ctc.message(), EMAIL_RECIPIENT)
+        finally:
+            await asyncio.sleep(60)
 
 
-async def lmd_mainloop(current: Current):
-    """
-    Tool to get the latest Sudoku from Sandra & Nala
-    """
+async def lmd_mainloop(current: Current) -> None:
+    """Tool to get the latest Sudoku from Sandra & Nala."""
     while True:
-        responses = (
-            (requests.get(SANDRA_AND_NALA), LogicMasters.SANDRAANDNALA),
-            (requests.get(RAT_RUN), LogicMasters.RATRUN),
-        )
+        async with httpx.AsyncClient() as client:
+            responses = (
+                (
+                    await client.get(SANDRA_AND_NALA, timeout=60),
+                    LogicMasters.SANDRAANDNALA,
+                ),
+                (await client.get(RAT_RUN, timeout=60), LogicMasters.RATRUN),
+            )
         for response in responses:
             await process_response(current, *response)
         await asyncio.sleep(DAY)
 
 
 async def process_response(
-    current: Current, response: requests.Response, lmd: LogicMasters
+    current: Current, response: httpx.Response, lmd: LogicMasters
 ) -> None:
-    if response.ok:
-        latest = await get_latest(response.text)
+    if response.status_code == OK_RESPONSE:
+        latest = get_latest(response.text)
         LOGGER.info(latest)
-        data = await read_data(LMD_LATEST)
+        data = read_data(LMD_LATEST)
         from_disk = Link.from_file(data.get(lmd.to_string()))
         LOGGER.info(from_disk)
         if latest != from_disk:
             string = lmd.to_string().title()
             await current.update(latest, lmd)
             LOGGER.info("LMD: %s", latest)
-            await send_email(
+            send_email(
                 f"New {string} Sudoku: {latest.title}",
                 f"Try the new {string} puzzle {latest.title}, https://logic-masters.de{latest.url}",
                 EMAIL_RECIPIENT,
@@ -145,11 +152,13 @@ class Current:
     sandra_and_nala: Link
     rat_run: Link
 
-    async def update(self, item: Video | Link, lmd: LogicMasters):
+    async def update(self, item: Video | Link, lmd: LogicMasters) -> None:
         match item:
             case Video():
                 self.ctc = item
-                await write_out({"channel": self.channel, "last_id": item.youtube_id}, CTC_LATEST)
+                write_out(
+                    {"channel": self.channel, "last_id": item.youtube_id}, CTC_LATEST
+                )
             case Link():
                 match lmd:
                     case LogicMasters.SANDRAANDNALA:
@@ -158,7 +167,7 @@ class Current:
                         self.rat_run = item
                     case LogicMasters.NONE:
                         pass
-                await write_out(
+                write_out(
                     {
                         "sandra and nala": self.sandra_and_nala.to_json(),
                         "rat run": self.rat_run.to_json(),
@@ -168,9 +177,7 @@ class Current:
 
 
 class Video(NamedTuple):
-    """
-    Class to hold the useful data about a video
-    """
+    """Class to hold the useful data about a video."""
 
     title: str
     sudoku_links: list[str]
@@ -202,7 +209,7 @@ class Video(NamedTuple):
     @classmethod
     async def from_id(cls, video_id: str) -> Video:
         data = await get_data(f"videos?part=snippet%2CcontentDetails&id={video_id}")
-        run_time = await get_time(data["contentDetails"]["duration"])
+        run_time = get_time(data["contentDetails"]["duration"])
         description = data["snippet"]["description"]
         title = data["snippet"]["title"]
 
@@ -215,19 +222,27 @@ class Video(NamedTuple):
         ]
         if not urls:
             urls = [""]
-        for lnk in ("https://tinyurl.com/CTCCatalogue", "https://crackingthecryptic.com/#apps"):
+        for lnk in (
+            "https://tinyurl.com/CTCCatalogue",
+            "https://crackingthecryptic.com/#apps",
+        ):
             if lnk in urls:
                 urls.remove(lnk)
-        return cls(title=title, sudoku_links=urls, duration=run_time, youtube_id=video_id)
+        return cls(
+            title=title, sudoku_links=urls, duration=run_time, youtube_id=video_id
+        )
 
 
 async def get_latest_video(channel_id: str) -> Video:
     """
-    Get the latest video published from the channel
+    Get the latest video published from the channel.
+
+    Returns
+    -------
+    Video: Information of the found youtube link.
+
     """
-
     channel = await get_data(f"channels?part=contentDetails&id={channel_id}")
-
     playlist_id = channel["contentDetails"]["relatedPlaylists"]["uploads"]
 
     video = await get_data(
@@ -239,10 +254,8 @@ async def get_latest_video(channel_id: str) -> Video:
     return await Video.from_id(latest_id)
 
 
-async def send_email(subject: str | None, message: str, receiver: str):
-    """
-    Send an email with the latest video information.
-    """
+def send_email(subject: str | None, message: str, receiver: str) -> None:
+    """Send an email with the latest video information."""
     msg = EmailMessage()
     if subject:
         msg["Subject"] = subject
@@ -255,22 +268,35 @@ async def send_email(subject: str | None, message: str, receiver: str):
     smtp.starttls()
     smtp.login(EMAIL_USER, EMAIL_PASSWORD)
     smtp.send_message(msg)
-
-    LOGGER.info(f"sent {msg}")
+    message = f"sent {msg}"
+    LOGGER.info(message)
 
 
 async def get_data(payload: str) -> dict[str, Any]:
     """
     Gather the useful information from the JSON object as a dictionary.
+
+    Returns
+    -------
+    JSON data for the information.
+
     """
-    return json.loads(requests.get(f"{BASE_URL}/{payload}&key={API_KEY}", timeout=5).text)["items"][
-        0
-    ]
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{BASE_URL}/{payload}&key={API_KEY}", timeout=5)
+    try:
+        return json.loads(response.text)["items"][0]
+    except IndexError:
+        raise BadVideoError
 
 
-async def get_time(runtime: str) -> timedelta:
+def get_time(runtime: str) -> timedelta:
     """
-    Convert the runtime string into a struct_time
+    Convert the runtime string into a struct_time.
+
+    Returns
+    -------
+    Video runtime.
+
     """
     time_delta = timedelta(seconds=0)
     ma = TIME.match(runtime)
@@ -285,17 +311,20 @@ async def get_time(runtime: str) -> timedelta:
     return time_delta
 
 
-async def write_out(data: Any, file: Path):
-    """
-    Write the last video to disk
-    """
+def write_out(data: dict[str, str | dict[str, str]], file: Path) -> None:
+    """Write the last video to disk."""
     with file.open("w", encoding="utf8") as out:
         json.dump(data, out, indent=2)
 
 
-async def read_data(file: Path) -> dict[str, str | dict[str, str]]:
+def read_data(file: Path) -> dict[str, str | dict[str, str]]:
     """
     Read stored data.
+
+    Returns
+    -------
+    Current file information.
+
     """
     with file.open("r", encoding="utf8") as fp:
         return json.load(fp)
@@ -308,7 +337,7 @@ class LogicMastersParser(HTMLParser):
         self.current: Link = Link()
         super().__init__()
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "table":
             self.table_found = True
 
@@ -317,12 +346,12 @@ class LogicMastersParser(HTMLParser):
                 if attr[1]:
                     self.current.url = attr[1]
 
-    def handle_endtag(self, tag: str):
+    def handle_endtag(self, tag: str) -> None:
         if self.table_found and tag == "a":
             self.links.append(self.current)
             self.current = Link()
 
-    def handle_data(self, data: str):
+    def handle_data(self, data: str) -> None:
         if self.table_found:
             self.current.title = data
 
@@ -366,10 +395,14 @@ class Link:
         return {"url": self.url, "title": self.title}
 
 
-async def get_latest(html: str) -> Link:
+def get_latest(html: str) -> Link:
     parser = LogicMastersParser()
     parser.feed(html)
     return parser.links[0]
+
+
+class BadVideoError(Exception):
+    pass
 
 
 if __name__ == "__main__":
