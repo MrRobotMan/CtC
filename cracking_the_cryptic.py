@@ -26,7 +26,7 @@ stream_handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 error_handler.setFormatter(formatter)
 stream_handler.setFormatter(formatter)
-LOGGER = logging.getLogger()
+LOGGER = logging.getLogger("ctc")
 LOGGER.setLevel(logging.INFO)
 LOGGER.addHandler(error_handler)
 LOGGER.addHandler(stream_handler)
@@ -79,7 +79,7 @@ async def mainloop() -> None:
     try:
         ctc_video = await Video.from_id(video_id)
     except BadVideoError:
-        ctc_video = Video("", [], timedelta(), "")
+        ctc_video = Video.empty()
     lmd = read_data(LMD_LATEST)
     sandra_and_nala = Link.from_file(lmd.get("sandra and nala"))
     rat_run = Link.from_file(lmd.get("rat run"))
@@ -96,17 +96,17 @@ async def ctc_mainloop(current: Current, channel: str) -> None:
         try:
             last_video = await get_latest_video(channel_id=channel)
         except BadVideoError:
-            pass
-        else:
-            if (
-                last_video.youtube_id != current.ctc.youtube_id
-                and last_video.is_valid()
-            ):
-                await current.update(last_video, LogicMasters.NONE)
-                LOGGER.info("CTC: %s", last_video)
-                send_email(current.ctc.title, current.ctc.message(), EMAIL_RECIPIENT)
-        finally:
-            await asyncio.sleep(60)
+            last_video = Video.empty()
+        LOGGER.info("CTC: %s", last_video)
+        current.update(last_video, LogicMasters.NONE)
+        if last_video.youtube_id != current.ctc.youtube_id and last_video.is_valid():
+            LOGGER.info("Updated")
+            send_email(
+                f"{current.ctc.title} - {current.ctc.pretty_time()}",
+                current.ctc.message(),
+                EMAIL_RECIPIENT,
+            )
+        await asyncio.sleep(60)
 
 
 async def lmd_mainloop(current: Current) -> None:
@@ -130,14 +130,11 @@ async def process_response(
 ) -> None:
     if response.status_code == OK_RESPONSE:
         latest = get_latest(response.text)
-        LOGGER.info(latest)
         data = read_data(LMD_LATEST)
         from_disk = Link.from_file(data.get(lmd.to_string()))
-        LOGGER.info(from_disk)
         if latest != from_disk:
             string = lmd.to_string().title()
-            await current.update(latest, lmd)
-            LOGGER.info("LMD: %s", latest)
+            current.update(latest, lmd)
             send_email(
                 f"New {string} Sudoku: {latest.title}",
                 f"Try the new {string} puzzle {latest.title}, https://logic-masters.de{latest.url}",
@@ -152,7 +149,7 @@ class Current:
     sandra_and_nala: Link
     rat_run: Link
 
-    async def update(self, item: Video | Link, lmd: LogicMasters) -> None:
+    def update(self, item: Video | Link, lmd: LogicMasters) -> None:
         match item:
             case Video():
                 self.ctc = item
@@ -187,7 +184,8 @@ class Video(NamedTuple):
     def message(self) -> str:
         links = "\n".join(lnk for lnk in self.sudoku_links)
         return (
-            f"Video: {self.title} (https://www.youtube.com/watch?v={self.youtube_id})\n"
+            f"Video title: {self.title}\n"
+            f"Video link: https://www.youtube.com/watch?v={self.youtube_id})\n"
             f"Time: {self.pretty_time()}\n"
             f"Puzzle: {links}"
         )
@@ -231,6 +229,10 @@ class Video(NamedTuple):
         return cls(
             title=title, sudoku_links=urls, duration=run_time, youtube_id=video_id
         )
+
+    @classmethod
+    def empty(cls) -> Video:
+        return Video(title="", sudoku_links=[], duration=timedelta(0), youtube_id="")
 
 
 async def get_latest_video(channel_id: str) -> Video:
