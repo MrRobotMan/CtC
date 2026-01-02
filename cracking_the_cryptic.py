@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import timedelta, datetime
 from email.message import EmailMessage
 from enum import Enum, auto
 from html.parser import HTMLParser
@@ -19,10 +19,12 @@ from typing import Any, NamedTuple
 import dotenv
 import httpx
 
+dotenv.load_dotenv()
+
 error_handler = logging.FileHandler("ctc.log", encoding="utf8")
 error_handler.setLevel(logging.ERROR)
 stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.INFO)
+stream_handler.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 error_handler.setFormatter(formatter)
 stream_handler.setFormatter(formatter)
@@ -32,7 +34,6 @@ LOGGER.addHandler(error_handler)
 LOGGER.addHandler(stream_handler)
 
 
-dotenv.load_dotenv()
 API_KEY = os.environ["YOUTUBE_KEY"]
 SMTP_SERVER = os.environ["SMTP_SERVER"]
 EMAIL_USER = os.environ["EMAIL_USER"]
@@ -40,6 +41,9 @@ EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
 PHONE = os.environ["PHONE"]
 EMAIL_RECIPIENT = os.environ["EMAIL_RECIPIENT"]
 SMTP_PORT = 587
+DEBUG = os.environ.get("CTC_DEBUG", None)
+if DEBUG == "Debug":
+    LOGGER.setLevel(logging.DEBUG)
 
 BASE_URL = "https://youtube.googleapis.com/youtube/v3"
 SANDRA_AND_NALA = "https://logic-masters.de/Raetselportal/Suche/erweitert.php?suchautor=SandraNala&suchverhalt=nichtgeloest"
@@ -84,6 +88,7 @@ async def mainloop() -> None:
     sandra_and_nala = Link.from_file(lmd.get("sandra and nala"))
     rat_run = Link.from_file(lmd.get("rat run"))
     current = Current(ctc_video, channel, sandra_and_nala, rat_run)
+    LOGGER.debug("mainloop - %s", current)
     ctc = asyncio.create_task(ctc_mainloop(current, channel))
     lmd = asyncio.create_task(lmd_mainloop(current))
     await ctc
@@ -92,19 +97,25 @@ async def mainloop() -> None:
 
 async def ctc_mainloop(current: Current, channel: str) -> None:
     """Tool to get the latest Sudoku from CrackingTheCryptic."""
+    LOGGER.debug("ctc_mainloop - Started CTC")
     while True:
         try:
             last_video = await get_latest_video(channel_id=channel)
         except BadVideoError:
             last_video = Video.empty()
-        LOGGER.info("CTC: %s", last_video)
-        current.update(last_video, LogicMasters.NONE)
-        if last_video.youtube_id != current.ctc.youtube_id and last_video.is_valid():
-            LOGGER.info("Updated")
+        LOGGER.debug("ctc_mainloop - %s", last_video)
+        if (
+            (last_video.youtube_id != current.ctc.youtube_id)
+            and last_video.is_valid()
+            and (last_video.published_time > current.ctc.published_time)
+        ):
+            LOGGER.debug("ctc_mainloop - Updated CTC: %s -> %s", current, last_video)
+            current.update(last_video, LogicMasters.NONE)
             send_email(
                 f"{current.ctc.title} - {current.ctc.pretty_time()}",
                 current.ctc.message(),
                 EMAIL_RECIPIENT,
+                "ctc",
             )
         await asyncio.sleep(60)
 
@@ -131,14 +142,18 @@ async def process_response(
     if response.status_code == OK_RESPONSE:
         latest = get_latest(response.text)
         data = read_data(LMD_LATEST)
+        LOGGER.debug("process_response - Latest: %s", latest)
         from_disk = Link.from_file(data.get(lmd.to_string()))
+        LOGGER.debug("process_response - Stored: %s", from_disk)
         if latest != from_disk:
+            LOGGER.debug("Emailing")
             string = lmd.to_string().title()
             current.update(latest, lmd)
             send_email(
                 f"New {string} Sudoku: {latest.title}",
                 f"Try the new {string} puzzle {latest.title}, https://logic-masters.de{latest.url}",
                 EMAIL_RECIPIENT,
+                "lmd",
             )
 
 
@@ -150,6 +165,7 @@ class Current:
     rat_run: Link
 
     def update(self, item: Video | Link, lmd: LogicMasters) -> None:
+        LOGGER.debug("Updating %s with category %s and tag %s", self, item, lmd)
         match item:
             case Video():
                 self.ctc = item
@@ -163,7 +179,7 @@ class Current:
                     case LogicMasters.RATRUN:
                         self.rat_run = item
                     case LogicMasters.NONE:
-                        pass
+                        return
                 write_out(
                     {
                         "sandra and nala": self.sandra_and_nala.to_json(),
@@ -180,12 +196,13 @@ class Video(NamedTuple):
     sudoku_links: list[str]
     duration: timedelta
     youtube_id: str
+    published_time: datetime
 
     def message(self) -> str:
         links = "\n".join(lnk for lnk in self.sudoku_links)
         return (
             f"Video title: {self.title}\n"
-            f"Video link: https://www.youtube.com/watch?v={self.youtube_id})\n"
+            f"Video link: https://www.youtube.com/watch?v={self.youtube_id}\n"
             f"Time: {self.pretty_time()}\n"
             f"Puzzle: {links}"
         )
@@ -208,6 +225,9 @@ class Video(NamedTuple):
     async def from_id(cls, video_id: str) -> Video:
         data = await get_data(f"videos?part=snippet%2CcontentDetails&id={video_id}")
         run_time = get_time(data["contentDetails"]["duration"])
+        published_time = datetime.strptime(
+            data["snippet"]["publishedAt"], "%Y-%m-%dT%H:%M:%SZ"
+        )
         description = data["snippet"]["description"]
         title = data["snippet"]["title"]
 
@@ -227,12 +247,24 @@ class Video(NamedTuple):
             if lnk in urls:
                 urls.remove(lnk)
         return cls(
-            title=title, sudoku_links=urls, duration=run_time, youtube_id=video_id
+            title=title,
+            sudoku_links=urls,
+            duration=run_time,
+            youtube_id=video_id,
+            published_time=published_time,
         )
 
     @classmethod
     def empty(cls) -> Video:
-        return Video(title="", sudoku_links=[], duration=timedelta(0), youtube_id="")
+        return Video(
+            title="",
+            sudoku_links=[],
+            duration=timedelta(0),
+            youtube_id="",
+            published_time=datetime(
+                year=1900, month=1, day=1, hour=0, minute=0, second=0
+            ),
+        )
 
 
 async def get_latest_video(channel_id: str) -> Video:
@@ -246,17 +278,15 @@ async def get_latest_video(channel_id: str) -> Video:
     """
     channel = await get_data(f"channels?part=contentDetails&id={channel_id}")
     playlist_id = channel["contentDetails"]["relatedPlaylists"]["uploads"]
-
     video = await get_data(
         f"playlistItems?part=snippet%2CcontentDetails&maxResults=1&playlistId={playlist_id}"
     )
-
     latest_id = video["contentDetails"]["videoId"]
 
     return await Video.from_id(latest_id)
 
 
-def send_email(subject: str | None, message: str, receiver: str) -> None:
+def send_email(subject: str | None, message: str, receiver: str, caller: str) -> None:
     """Send an email with the latest video information."""
     msg = EmailMessage()
     if subject:
@@ -269,9 +299,11 @@ def send_email(subject: str | None, message: str, receiver: str) -> None:
     smtp.ehlo()
     smtp.starttls()
     smtp.login(EMAIL_USER, EMAIL_PASSWORD)
+    if DEBUG == "Debug":
+        message = f"send_email called from {caller} - Sent {msg}"
+        LOGGER.debug(message)
+        return
     smtp.send_message(msg)
-    message = f"sent {msg}"
-    LOGGER.info(message)
 
 
 async def get_data(payload: str) -> dict[str, Any]:
@@ -408,4 +440,10 @@ class BadVideoError(Exception):
 
 
 if __name__ == "__main__":
-    asyncio.run(mainloop())
+    try:
+        asyncio.run(mainloop())
+    except KeyboardInterrupt:
+        if DEBUG == "Debug":
+            write_out(
+                {"channel": "UCC-UOdK8-mIjxBQm_ot1T-Q", "last_id": ""}, CTC_LATEST
+            )
