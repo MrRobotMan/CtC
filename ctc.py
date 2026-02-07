@@ -165,10 +165,12 @@ async def get_latest_video(channel_id: str) -> Video:
     Video: Information of the found youtube link.
 
     """
-    channel = await get_data(f"channels?part=contentDetails&id={channel_id}")
+    channel = await get_data(
+        f"{BASE_URL}/channels?part=contentDetails&id={channel_id}&key={API_KEY}"
+    )
     playlist_id = channel["contentDetails"]["relatedPlaylists"]["uploads"]
     video = await get_data(
-        f"playlistItems?part=snippet%2CcontentDetails&maxResults=1&playlistId={playlist_id}"
+        f"{BASE_URL}/playlistItems?part=snippet%2CcontentDetails&maxResults=1&playlistId={playlist_id}&key={API_KEY}"
     )
     latest_id = video["contentDetails"]["videoId"]
 

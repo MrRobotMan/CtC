@@ -7,12 +7,12 @@ from contextlib import suppress
 
 import dotenv
 
+dotenv.load_dotenv()
+
 from ctc import CTC_LATEST, CtcCurrent, Video, ctc_mainloop
 from lmd import LMD_LATEST, Link, LmdCurrent, lmd_mainloop
 from logger import LOGGER
 from utils import read_data, BadVideoError
-
-dotenv.load_dotenv()
 
 
 async def mainloop() -> None:
